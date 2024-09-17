@@ -2,16 +2,17 @@ package client
 
 import (
 	"bytes"
-	"context"
 	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
-	"github.com/smartcontractkit/chainlink-relay/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/utils"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 )
 
 // SetupLocalSolNode sets up a local solana node via solana cli, and returns the url
@@ -23,6 +24,7 @@ func SetupLocalSolNode(t *testing.T) string {
 		"--reset",
 		"--rpc-port", port,
 		"--faucet-port", faucetPort,
+		"--ledger", t.TempDir(),
 	)
 	var stdErr bytes.Buffer
 	cmd.Stderr = &stdErr
@@ -33,7 +35,7 @@ func SetupLocalSolNode(t *testing.T) string {
 		assert.NoError(t, cmd.Process.Kill())
 		if err2 := cmd.Wait(); assert.Error(t, err2) {
 			if !assert.Contains(t, err2.Error(), "signal: killed", cmd.ProcessState.String()) {
-				t.Log("solana-test-validator stderr:", stdErr.String())
+				t.Logf("solana-test-validator\n stdout: %s\n stderr: %s", stdOut.String(), stdErr.String())
 			}
 		}
 	})
@@ -43,7 +45,7 @@ func SetupLocalSolNode(t *testing.T) string {
 	for i := 0; i < 30; i++ {
 		time.Sleep(time.Second)
 		client := rpc.New(url)
-		out, err := client.GetHealth(context.Background())
+		out, err := client.GetHealth(tests.Context(t))
 		if err != nil || out != rpc.HealthOk {
 			t.Logf("API server not ready yet (attempt %d)\n", i+1)
 			continue

@@ -19,6 +19,13 @@ type Oracle = {
   apis: string[]
 }
 
+type Transmission = {
+  latestTransmissionNo: number
+  roundId: number
+  answer: any
+  transmitter: string
+}
+
 // Returns a formatted oracle log given a list of addresses and a start tab
 // if a list of oracles is provided, add context to logs
 const makeOracleLog = (addresses: string[], startTab = 2, oracles?: Oracle[]): string[] => {
@@ -89,6 +96,8 @@ export default class OCR2InspectResponses extends SolanaCommand {
     super(flags, args)
   }
 
+  toHexString = (n: number[]) => Buffer.from(n).toString('hex')
+
   execute = async () => {
     const ocr2 = getContract(CONTRACT_LIST.OCR_2, '')
     const program = this.loadProgram(ocr2.idl, ocr2.programId.toString())
@@ -102,7 +111,7 @@ export default class OCR2InspectResponses extends SolanaCommand {
 
     - Latest Transmitter: ${onChainState.config.latestTransmitter}
     - Latest Aggregator Round ID: ${onChainState.config.latestAggregatorRoundId}
-    - Latest Config Digest: ${onChainState.config.latestConfigDigest}
+    - Latest Config Digest: 0x${this.toHexString(onChainState.config.latestConfigDigest)}
     - Latest Config Block Number: ${onChainState.config.latestConfigBlockNumber}
     `,
     )
@@ -116,7 +125,7 @@ export default class OCR2InspectResponses extends SolanaCommand {
 
     // Store observers from each transmission
     const observerRounds: PublicKey[][] = []
-
+    const transmissionDetails: Transmission[] = []
     events.forEach((event, i) => {
       // Map observer indices into addresses
       const observers = (event.observers as []).slice(0, event.observerCount).map((observer) => transmitters[observer])
@@ -144,7 +153,12 @@ export default class OCR2InspectResponses extends SolanaCommand {
     ${event.observerCount}/${transmitters.length} oracles are responding
   `,
       )
-
+      transmissionDetails.push({
+        latestTransmissionNo: i + 1,
+        roundId: event.roundId,
+        answer: parseInt(event.answer.toString(), 10),
+        transmitter: transmitters[event.transmitter].toString(),
+      })
       // Log oracles that are not responsive
       var notResponding: number = 0
       transmitters.forEach((transmitter) => {
@@ -185,6 +199,9 @@ export default class OCR2InspectResponses extends SolanaCommand {
     const successfulInspection = inspection.inspect(inspections)
 
     return {
+      data: {
+        latestTransmissions: transmissionDetails,
+      },
       responses: [
         {
           tx: this.wrapInspectResponse(successfulInspection, state.toString()),

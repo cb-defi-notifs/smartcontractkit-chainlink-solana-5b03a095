@@ -4,14 +4,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 
+	bin "github.com/gagliardetto/binary"
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/rs/zerolog/log"
 	"github.com/smartcontractkit/chainlink/integration-tests/contracts"
 	"github.com/smartcontractkit/libocr/offchainreporting2/confighelper"
 
-	ocr_2 "github.com/smartcontractkit/chainlink-solana/contracts/generated/ocr2"
+	ocr_2 "github.com/smartcontractkit/chainlink-solana/contracts/generated/ocr_2"
 	"github.com/smartcontractkit/chainlink-solana/integration-tests/utils"
 )
 
@@ -36,7 +38,7 @@ func (m *OCRv2) writeOffChainConfig(ocConfigBytes []byte) error {
 	payer := m.Client.DefaultWallet
 	return m.Client.TXSync(
 		"Write OffChain config chunk",
-		rpc.CommitmentFinalized,
+		rpc.CommitmentConfirmed,
 		[]solana.Instruction{
 			ocr_2.NewWriteOffchainConfigInstruction(
 				ocConfigBytes,
@@ -140,7 +142,7 @@ func (m *OCRv2) finalizeOffChainConfig() error {
 	payer := m.Client.DefaultWallet
 	return m.Client.TXSync(
 		"Finalize OffChain config",
-		rpc.CommitmentFinalized,
+		rpc.CommitmentConfirmed,
 		[]solana.Instruction{
 			ocr_2.NewFinalizeProposalInstruction(
 				m.Proposal.PublicKey(),
@@ -188,11 +190,17 @@ func (m *OCRv2) makeDigest() ([]byte, error) {
 
 func (m *OCRv2) fetchProposalAccount() (*ocr_2.Proposal, error) {
 	var proposal ocr_2.Proposal
-	err := m.Client.RPC.GetAccountDataInto(
+	resp, err := m.Client.RPC.GetAccountInfoWithOpts(
 		context.Background(),
 		m.Proposal.PublicKey(),
-		&proposal,
+		&rpc.GetAccountInfoOpts{
+			Commitment: rpc.CommitmentConfirmed,
+		},
 	)
+	if err != nil {
+		return nil, err
+	}
+	err = bin.NewBinDecoder(resp.Value.Data.GetBinary()).Decode(&proposal)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +217,7 @@ func (m *OCRv2) createProposal(version uint64) error {
 	}
 	return m.Client.TXSync(
 		"Create proposal",
-		rpc.CommitmentFinalized,
+		rpc.CommitmentConfirmed,
 		[]solana.Instruction{
 			proposalAccInstruction,
 			ocr_2.NewCreateProposalInstruction(
@@ -237,46 +245,50 @@ func (m *OCRv2) createProposal(version uint64) error {
 // Configure sets offchain config in multiple transactions
 func (m *OCRv2) Configure(cfg contracts.OffChainAggregatorV2Config) error {
 	_, _, _, _, version, cfgBytes, err := confighelper.ContractSetConfigArgsForTests(
-		cfg.DeltaProgress,
-		cfg.DeltaResend,
-		cfg.DeltaRound,
-		cfg.DeltaGrace,
-		cfg.DeltaStage,
+		cfg.DeltaProgress.Duration(),
+		cfg.DeltaResend.Duration(),
+		cfg.DeltaRound.Duration(),
+		cfg.DeltaGrace.Duration(),
+		cfg.DeltaStage.Duration(),
 		cfg.RMax,
 		cfg.S,
 		cfg.Oracles,
 		cfg.ReportingPluginConfig,
-		cfg.MaxDurationQuery,
-		cfg.MaxDurationObservation,
-		cfg.MaxDurationReport,
-		cfg.MaxDurationShouldAcceptFinalizedReport,
-		cfg.MaxDurationShouldTransmitAcceptedReport,
+		cfg.MaxDurationQuery.Duration(),
+		cfg.MaxDurationObservation.Duration(),
+		cfg.MaxDurationReport.Duration(),
+		cfg.MaxDurationShouldAcceptFinalizedReport.Duration(),
+		cfg.MaxDurationShouldTransmitAcceptedReport.Duration(),
 		cfg.F,
 		cfg.OnchainConfig,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("config args: %w", err)
 	}
 	chunks := utils.ChunkSlice(cfgBytes, 1000)
 	if err = m.createProposal(version); err != nil {
-		return err
+		return fmt.Errorf("createProposal: %w", err)
 	}
 	if err = m.proposeConfig(cfg); err != nil {
-		return err
+		return fmt.Errorf("proposeConfig: %w", err)
 	}
-	for _, cfgChunk := range chunks {
+	for i, cfgChunk := range chunks {
 		if err = m.writeOffChainConfig(cfgChunk); err != nil {
-			return err
+			return fmt.Errorf("writeOffchainConfig: (chunk %d) %w", i, err)
 		}
 	}
 	if err = m.finalizeOffChainConfig(); err != nil {
-		return err
+		return fmt.Errorf("finalizeOffchainConfig: %w", err)
 	}
 	digest, err := m.makeDigest()
 	if err != nil {
-		return err
+		return fmt.Errorf("makeDigest: %w", err)
 	}
-	return m.acceptProposal(digest)
+
+	if err = m.acceptProposal(digest); err != nil {
+		return fmt.Errorf("acceptProposal: %w", err)
+	}
+	return nil
 }
 
 // DumpState dumps all OCR accounts state
@@ -318,7 +330,7 @@ func (m *OCRv2) proposeConfig(ocConfig contracts.OffChainAggregatorV2Config) err
 	}
 	err := m.Client.TXSync(
 		"Propose new config",
-		rpc.CommitmentFinalized,
+		rpc.CommitmentConfirmed,
 		[]solana.Instruction{
 			ocr_2.NewProposeConfigInstruction(
 				oracles,
@@ -366,7 +378,7 @@ func (m *OCRv2) proposeConfig(ocConfig contracts.OffChainAggregatorV2Config) err
 	instr = append(instr, proposeInstr.Build())
 	return m.Client.TXSync(
 		"Set payees",
-		rpc.CommitmentFinalized,
+		rpc.CommitmentConfirmed,
 		instr,
 		func(key solana.PublicKey) *solana.PrivateKey {
 			if key.Equals(payee.PublicKey()) {

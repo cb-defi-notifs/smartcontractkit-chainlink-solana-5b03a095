@@ -5,11 +5,12 @@ import (
 	"time"
 
 	"github.com/gagliardetto/solana-go"
-	"github.com/smartcontractkit/chainlink-relay/pkg/logger"
-	"github.com/smartcontractkit/chainlink-solana/pkg/solana/config"
-	"github.com/smartcontractkit/chainlink-solana/pkg/solana/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+
+	"github.com/smartcontractkit/chainlink-solana/pkg/solana/config"
 )
 
 func TestSetupLocalSolNode_SimultaneousNetworks(t *testing.T) {
@@ -23,7 +24,7 @@ func TestSetupLocalSolNode_SimultaneousNetworks(t *testing.T) {
 	// client configs
 	requestTimeout := 5 * time.Second
 	lggr := logger.Test(t)
-	cfg := config.NewConfig(db.ChainCfg{}, lggr)
+	cfg := config.NewDefault()
 
 	// check & fund address
 	checkFunded := func(t *testing.T, url string) {

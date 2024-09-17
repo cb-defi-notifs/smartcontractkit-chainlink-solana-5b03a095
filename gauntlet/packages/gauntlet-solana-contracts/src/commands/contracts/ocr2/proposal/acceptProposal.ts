@@ -4,7 +4,7 @@ import { logger, prompt, BN } from '@chainlink/gauntlet-core/dist/utils'
 import { SolanaCommand, TransactionResponse } from '@chainlink/gauntlet-solana'
 import { PublicKey } from '@solana/web3.js'
 import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token'
-import { utils } from '@project-serum/anchor'
+import { utils } from '@coral-xyz/anchor'
 import { CONTRACT_LIST, getContract } from '../../../../lib/contracts'
 import ProposeOffchainConfig, { OffchainConfig } from '../proposeOffchainConfig'
 import { serializeOffchainConfig, deserializeConfig } from '../../../../lib/encoding'
@@ -271,6 +271,25 @@ export default class AcceptProposal extends SolanaCommand {
     await prompt('Accept config proposal?')
   }
 
+  afterExecute = async () => {
+    const address = this.args[0]
+    const contractState = (await this.program.account.state.fetch(new PublicKey(address))) as any
+    const configDigest = `0x${Buffer.from(contractState.config.latestConfigDigest).toString('hex')}`
+
+    logger.info(`lastConfigDigest to save in RDD: ${configDigest}`)
+    if (this.flags.rdd) {
+      logger.info(`RDD file ${this.flags.rdd} found! Will automatically update lastConfigDigest for you`)
+      const rdd = RDD.load(this.flags.network, this.flags.rdd)
+      rdd.contracts[address]['config']['lastConfigDigest'] = configDigest
+      RDD.write(this.flags.network, this.flags.rdd, rdd)
+      logger.success(
+        `RDD file ${this.flags.rdd} updated. Please reformat RDD (run ./bin/degenerate and ./bin/generate) as needed`,
+      )
+    } else {
+      logger.warn(`no rdd file input, you must manually update lastConfigDigest in rdd yourself`)
+    }
+  }
+
   execute = async () => {
     await this.buildCommand(this.flags, this.args)
 
@@ -283,6 +302,8 @@ export default class AcceptProposal extends SolanaCommand {
 
     const txhash = await this.sendTxWithIDL(this.signAndSendRawTx, this.program.idl)(rawTx)
     logger.success(`Accepted proposal on tx ${txhash}`)
+
+    await this.afterExecute()
 
     return {
       responses: [

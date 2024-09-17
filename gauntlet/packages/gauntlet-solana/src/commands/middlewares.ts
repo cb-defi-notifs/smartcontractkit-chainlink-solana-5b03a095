@@ -1,14 +1,14 @@
 import { Middleware, Next } from '@chainlink/gauntlet-core'
 import { boolean } from '@chainlink/gauntlet-core/dist/lib/args'
 import { assertions, logger } from '@chainlink/gauntlet-core/dist/utils'
-import { AnchorProvider } from '@project-serum/anchor'
+import { AnchorProvider } from '@coral-xyz/anchor'
 import { Connection, Keypair } from '@solana/web3.js'
 import { DEFAULT_DERIVATION_PATH } from '../lib/constants'
 import SolanaCommand from './internal/solana'
 import { LedgerWallet, LocalWallet } from './wallet'
 
 const isValidURL = (url: string) => {
-  var pattern = new RegExp('^(https?)://')
+  const pattern = new RegExp('^(https?|wss?):/')
   return pattern.test(url)
 }
 export const withProvider: Middleware = (c: SolanaCommand, next: Next) => {
@@ -17,8 +17,14 @@ export const withProvider: Middleware = (c: SolanaCommand, next: Next) => {
     nodeURL && isValidURL(nodeURL),
     `Invalid NODE_URL (${nodeURL}), please add an http:// or https:// prefix`,
   )
-
-  c.provider = new AnchorProvider(new Connection(nodeURL), c.wallet, {})
+  const wsUrl = process.env.WS_URL
+  if (wsUrl) {
+    assertions.assert(isValidURL(wsUrl), `Invalid WS_URL (${wsUrl}), please add an ws:// or wss:// prefix`)
+  }
+  c.provider = new AnchorProvider(new Connection(nodeURL, wsUrl ? { wsEndpoint: wsUrl } : {}), c.wallet, {
+    preflightCommitment: 'confirmed', // use confirmed commitment
+    commitment: 'confirmed',
+  })
   return next()
 }
 

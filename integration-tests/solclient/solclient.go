@@ -2,6 +2,7 @@ package solclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"math/big"
@@ -9,16 +10,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/smartcontractkit/chainlink-testing-framework/blockchain"
+	"github.com/smartcontractkit/chainlink-testing-framework/lib/blockchain"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/rpc"
+	confirm "github.com/gagliardetto/solana-go/rpc/sendAndConfirmTransaction"
 	"github.com/gagliardetto/solana-go/rpc/ws"
 	"github.com/gagliardetto/solana-go/text"
+
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 )
@@ -86,14 +86,6 @@ type Client struct {
 	LinkToken *LinkToken
 }
 
-func (c *Client) BalanceAt(ctx context.Context, address common.Address) (*big.Int, error) {
-	panic("implement me")
-}
-
-func (c *Client) GetTxReceipt(txHash common.Hash) (*types.Receipt, error) {
-	panic("implement me")
-}
-
 func (c *Client) GetNetworkType() string {
 	return c.Config.Type
 }
@@ -146,7 +138,7 @@ func (c *Client) CreateAccInstr(acc solana.PublicKey, accSize uint64, ownerPubKe
 	).Build(), nil
 }
 
-// TXSync executes tx synchronously in "CommitmentFinalized"
+// TXSync executes tx synchronously with specified commitment (defaults to finalized)
 func (c *Client) TXSync(name string, commitment rpc.CommitmentType, instr []solana.Instruction, signerFunc func(key solana.PublicKey) *solana.PrivateKey, payer solana.PublicKey) error {
 	recent, err := c.RPC.GetRecentBlockhash(context.Background(), rpc.CommitmentFinalized)
 	if err != nil {
@@ -235,7 +227,14 @@ func (c *Client) TXAsync(name string, instr []solana.Instruction, signerFunc fun
 	if _, err = tx.Sign(signerFunc); err != nil {
 		return err
 	}
-	sig, err := c.RPC.SendTransaction(context.Background(), tx)
+	sig, err := c.RPC.SendTransactionWithOpts(
+		context.Background(),
+		tx,
+		rpc.TransactionOpts{
+			PreflightCommitment: rpc.CommitmentConfirmed,
+		},
+	)
+
 	if err != nil {
 		return err
 	}
@@ -293,8 +292,8 @@ func (c *Client) AirdropAddresses(addr []string, solAmount uint64) error {
 func (c *Client) ListDirFilenamesByExt(dir string, ext string) ([]string, error) {
 	keyFiles := make([]string, 0)
 	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
-		if info.IsDir() {
-			return nil
+		if info.IsDir() && info.Name() != filepath.Base(dir) {
+			return filepath.SkipDir // only check first depth of folders
 		}
 		if filepath.Ext(path) == ext {
 			keyFiles = append(keyFiles, info.Name())
@@ -403,8 +402,8 @@ func (cfg *SolNetwork) Default() *SolNetwork {
 		ContractsDeployed: false,
 		PrivateKeys:       DefaultPrivateKeysSolValidator,
 		URLs: []string{
-			"http://localhost:8899",
-			"ws://localhost:8900",
+			"http://127.0.0.1:8899",
+			"ws://127.0.0.1:8900",
 		},
 	}
 }
@@ -462,26 +461,70 @@ func (c *Client) LatestBlockNumber(ctx context.Context) (uint64, error) {
 	panic("implement me")
 }
 
-func (c *Client) DeployContract(contractName string, deployer blockchain.ContractDeployer) (*common.Address, *types.Transaction, interface{}, error) {
-	panic("implement me")
-}
-
-func (c *Client) TransactionOpts(from *blockchain.EthereumWallet) (*bind.TransactOpts, error) {
-	panic("implement me")
-}
-
-func (c *Client) ProcessTransaction(tx *types.Transaction) error {
-	panic("implement me")
-}
-
-func (c *Client) IsTxConfirmed(txHash common.Hash) (bool, error) {
-	panic("implement me")
-}
-
 func (c *Client) GasStats() *blockchain.GasStats {
 	panic("implement me")
 }
 
 func (c *Client) AddHeaderEventSubscription(key string, subscriber blockchain.HeaderEventSubscription) {
 	panic("implement me")
+}
+
+func SendFunds(senderPrivateKey string, receiverPublicKey string, lamports uint64, rpcClient *rpc.Client, wsClient *ws.Client) error {
+	// Convert the private key string to a byte slice
+	var privateKeyBytes []byte
+	err := json.Unmarshal([]byte(senderPrivateKey), &privateKeyBytes)
+	if err != nil {
+		return err
+	}
+
+	accountFrom := solana.PrivateKey(privateKeyBytes)
+	accountTo := solana.MustPublicKeyFromBase58(receiverPublicKey)
+
+	// Get recent blockhash
+	recent, err := rpcClient.GetRecentBlockhash(context.Background(), rpc.CommitmentFinalized)
+	if err != nil {
+		return err
+	}
+
+	// Create a transfer transaction
+	tx, err := solana.NewTransaction(
+		[]solana.Instruction{
+			system.NewTransferInstruction(
+				lamports,
+				accountFrom.PublicKey(),
+				accountTo,
+			).Build(),
+		},
+		recent.Value.Blockhash,
+		solana.TransactionPayer(accountFrom.PublicKey()),
+	)
+	if err != nil {
+		return err
+	}
+
+	// Sign the transaction
+	_, err = tx.Sign(
+		func(key solana.PublicKey) *solana.PrivateKey {
+			if accountFrom.PublicKey().Equals(key) {
+				return &accountFrom
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	// Send transaction, and wait for confirmation:
+	_, err = confirm.SendAndConfirmTransaction(
+		context.Background(),
+		rpcClient,
+		wsClient,
+		tx,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

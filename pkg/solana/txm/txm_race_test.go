@@ -11,8 +11,8 @@ import (
 	solanaGo "github.com/gagliardetto/solana-go"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/smartcontractkit/chainlink-relay/pkg/logger"
-	"github.com/smartcontractkit/chainlink-relay/pkg/utils"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	solanaClient "github.com/smartcontractkit/chainlink-solana/pkg/solana/client"
 	clientmocks "github.com/smartcontractkit/chainlink-solana/pkg/solana/client/mocks"
@@ -67,7 +67,7 @@ func TestTxm_SendWithRetry_Race(t *testing.T) {
 		txm.fee = fee
 
 		_, _, _, err := txm.sendWithRetry(
-			utils.Context(t),
+			tests.Context(t),
 			tx,
 			txRetryDuration,
 		)
@@ -106,7 +106,8 @@ func TestTxm_SendWithRetry_Race(t *testing.T) {
 					return val
 				}
 				sig := make([]byte, 16)
-				rand.Read(sig)
+				_, err := rand.Read(sig)
+				require.NoError(t, err)
 				txs[strTx] = solanaGo.SignatureFromBytes(sig)
 
 				return txs[strTx]
@@ -134,7 +135,8 @@ func TestTxm_SendWithRetry_Race(t *testing.T) {
 					return val
 				}
 				sig := make([]byte, 16)
-				rand.Read(sig)
+				_, err := rand.Read(sig)
+				require.NoError(t, err)
 				txs[strTx] = solanaGo.SignatureFromBytes(sig)
 				lock.Unlock()
 
@@ -169,7 +171,8 @@ func TestTxm_SendWithRetry_Race(t *testing.T) {
 					return val
 				}
 				sig := make([]byte, 16)
-				rand.Read(sig)
+				_, err := rand.Read(sig)
+				require.NoError(t, err)
 				txs[strTx] = solanaGo.SignatureFromBytes(sig)
 
 				triggerDelay := len(txs) == 2

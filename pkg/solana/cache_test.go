@@ -18,11 +18,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/smartcontractkit/chainlink-relay/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/logger"
+	"github.com/smartcontractkit/chainlink-common/pkg/utils/tests"
 
 	"github.com/smartcontractkit/chainlink-solana/pkg/solana/client"
 	"github.com/smartcontractkit/chainlink-solana/pkg/solana/config"
-	"github.com/smartcontractkit/chainlink-solana/pkg/solana/db"
 )
 
 var mockTransmission = []byte{
@@ -93,7 +93,7 @@ func testTransmissionsResponse(t *testing.T, body []byte, sub uint64) []byte {
 
 func testSetupReader(t *testing.T, endpoint string) client.Reader {
 	lggr := logger.Test(t)
-	cfg := config.NewConfig(db.ChainCfg{}, lggr)
+	cfg := config.NewDefault()
 	client, err := client.NewClient(endpoint, cfg, 1*time.Second, lggr)
 	require.NoError(t, err)
 	return client
@@ -148,6 +148,7 @@ func TestGetLatestTransmission(t *testing.T) {
 }
 
 func TestCache(t *testing.T) {
+	ctx := tests.Context(t)
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// create response
 		body, err := io.ReadAll(r.Body)
@@ -156,39 +157,43 @@ func TestCache(t *testing.T) {
 		// state query
 		if bytes.Contains(body, []byte("11111111111111111111111111111111")) {
 			// Drop error, client may cancel ctx.
-			w.Write(testStateResponse())
+			w.Write(testStateResponse()) //nolint:errcheck
 			return
 		}
 
 		// transmissions query
 		// Drop error, client may cancel ctx.
-		w.Write(testTransmissionsResponse(t, body, 0))
+		w.Write(testTransmissionsResponse(t, body, 0)) //nolint:errcheck
 	}))
 
 	lggr := logger.Test(t)
-	stateCache := StateCache{
-		StateID: solana.MustPublicKeyFromBase58("11111111111111111111111111111111"),
-		cfg:     config.NewConfig(db.ChainCfg{}, lggr),
-		reader:  testSetupReader(t, mockServer.URL),
-		lggr:    lggr,
-	}
-	require.NoError(t, stateCache.Start())
+	stateCache := NewStateCache(
+		solana.MustPublicKeyFromBase58("11111111111111111111111111111111"),
+		"test-chain-id",
+		config.NewDefault(),
+		testSetupReader(t, mockServer.URL),
+		lggr,
+	)
+	require.NoError(t, stateCache.Start(ctx))
 	require.NoError(t, stateCache.Close())
-	require.NoError(t, stateCache.fetchState(context.Background()))
-	assert.Equal(t, "GADeYvXjPwZP7ds1yDY9VFp12bNjdxT1YyksMvFGK9xn", stateCache.state.Transmissions.String())
-	assert.True(t, !stateCache.stateTime.IsZero())
+	require.NoError(t, stateCache.Fetch(ctx))
+	state, err := stateCache.Read()
+	require.NoError(t, err)
+	assert.Equal(t, "GADeYvXjPwZP7ds1yDY9VFp12bNjdxT1YyksMvFGK9xn", state.Transmissions.String())
+	assert.True(t, !stateCache.Timestamp().IsZero())
 
-	transmissionsCache := TransmissionsCache{
-		TransmissionsID: solana.MustPublicKeyFromBase58("11111111111111111111111111111112"),
-		cfg:             config.NewConfig(db.ChainCfg{}, lggr),
-		reader:          testSetupReader(t, mockServer.URL),
-		lggr:            lggr,
-	}
-	require.NoError(t, transmissionsCache.Start())
+	transmissionsCache := NewTransmissionsCache(
+		solana.MustPublicKeyFromBase58("11111111111111111111111111111112"),
+		"test-chain-id",
+		config.NewDefault(),
+		testSetupReader(t, mockServer.URL),
+		lggr,
+	)
+	require.NoError(t, transmissionsCache.Start(ctx))
 	require.NoError(t, transmissionsCache.Close())
 
-	require.NoError(t, transmissionsCache.fetchLatestTransmission(context.Background()))
-	answer, err := transmissionsCache.ReadAnswer()
+	require.NoError(t, transmissionsCache.Fetch(ctx))
+	answer, err := transmissionsCache.Read()
 	assert.NoError(t, err)
 	assert.Equal(t, expectedTime, answer.Timestamp)
 	assert.Equal(t, expectedAns, answer.Data.String())
@@ -228,5 +233,4 @@ func TestNilPointerHandling(t *testing.T) {
 	passFirst = true // allow proper response for header query, fail on transmission
 	_, _, err = GetLatestTransmission(context.TODO(), reader, solana.PublicKey{}, "")
 	assert.EqualError(t, err, errString+"GetLatestTransmission.GetAccountInfoWithOpts.Transmission")
-
 }
