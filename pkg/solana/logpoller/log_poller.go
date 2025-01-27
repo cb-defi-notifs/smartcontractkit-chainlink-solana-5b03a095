@@ -14,6 +14,7 @@ import (
 
 	"github.com/smartcontractkit/chainlink-common/pkg/logger"
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
+	"github.com/smartcontractkit/chainlink-common/pkg/types/query"
 )
 
 var (
@@ -31,6 +32,7 @@ type ORM interface {
 	GetLatestBlock(ctx context.Context) (int64, error)
 	InsertLogs(context.Context, []Log) (err error)
 	SelectSeqNums(ctx context.Context) (map[int64]int64, error)
+	FilteredLogs(ctx context.Context, queryFilter []query.Expression, limitAndSort query.LimitAndSort, queryName string) ([]Log, error)
 }
 
 type logsLoader interface {
@@ -157,8 +159,8 @@ func (lp *Service) Process(ctx context.Context, programEvent ProgramEvent) (err 
 			return err
 		}
 
-		log.SubkeyValues = make([]IndexedValue, 0, len(filter.SubkeyPaths))
-		for _, path := range filter.SubkeyPaths {
+		log.SubKeyValues = make([]IndexedValue, 0, len(filter.SubKeyPaths))
+		for _, path := range filter.SubKeyPaths {
 			subKeyVal, decodeSubKeyErr := lp.filters.DecodeSubKey(ctx, lp.lggr, log.Data, filter.ID, path)
 			if decodeSubKeyErr != nil {
 				return decodeSubKeyErr
@@ -167,7 +169,7 @@ func (lp *Service) Process(ctx context.Context, programEvent ProgramEvent) (err 
 			if newIndexedValErr != nil {
 				return newIndexedValErr
 			}
-			log.SubkeyValues = append(log.SubkeyValues, indexedVal)
+			log.SubKeyValues = append(log.SubKeyValues, indexedVal)
 		}
 
 		log.SequenceNum = lp.filters.IncrementSeqNum(filter.ID)
@@ -375,4 +377,8 @@ func (lp *Service) backgroundWorkerRun(ctx context.Context) {
 	if err != nil {
 		lp.lggr.Errorw("Failed to prune filters", "err", err)
 	}
+}
+
+func (lp *Service) FilteredLogs(ctx context.Context, queryFilter []query.Expression, limitAndSort query.LimitAndSort, queryName string) ([]Log, error) {
+	return lp.orm.FilteredLogs(ctx, queryFilter, limitAndSort, queryName)
 }
